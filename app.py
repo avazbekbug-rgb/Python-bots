@@ -1,149 +1,180 @@
-import asyncio
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
-import logging
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 
 # --- SOZLAMALAR ---
-API_TOKEN = '8466034417:AAFYBovyZBTEk4OA5YUm86HMwhRe7xeJj_k'
-ADMIN_ID = 7653548625  # Sizning ID raqamingiz
+TOKEN = '8466034417:AAFYBovyZBTEk4OA5YUm86HMwhRe7xeJj_k'
+ADMIN_ID = 7653548625  # O'zingizning Telegram ID raqamingizni yozing
+CHANNELS = ['@sobirov_exe', '@PhonkuzX'] # Kanallaringiz useri
 
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+bot = telebot.TeleBot(TOKEN)
+admin_data = {} # Admin qadamlarini saqlash uchun
 
-# --- HOLATLAR (Kino qo'shish jarayoni) ---
-class MovieState(StatesGroup):
-    waiting_for_video = State()
-    waiting_for_code = State()
+# --- LUG'AT (Til sozlamalari) ---
+LANG = {
+    'uz': {
+        'sub_text': "Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling:",
+        'sub_btn': "➕ Obuna bo'lish",
+        'check_btn': "✅ Tekshirish",
+        'success': "Obuna tasdiqlandi! Kino kodini yuboring:",
+        'error': "❌ Hali hamma kanallarga obuna bo'lmadingiz!",
+        'not_found': "Bunday kodli kino topilmadi."
+    },
+    'ru': {
+        'sub_text': "Для использования бота подпишитесь на следующие каналы:",
+        'sub_btn': "➕ Подписаться",
+        'check_btn': "✅ Проверить",
+        'success': "Подписка подтверждена! Отправьте код фильма:",
+        'error': "❌ Вы еще не подписались на все каналы!",
+        'not_found': "Фильм с таким кодом не найден."
+    }
+}
 
 # --- MA'LUMOTLAR BAZASI ---
 def init_db():
-    conn = sqlite3.connect('bot_bazasi.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)''')
-    # Endi file_id emas, message_id (xabar raqami) saqlaymiz
-    cursor.execute('''CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, message_id INTEGER)''')
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS movies (code INTEGER PRIMARY KEY, file_id TEXT, name TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, lang TEXT)''')
     conn.commit()
     conn.close()
 
-def add_user(user_id, username):
-    conn = sqlite3.connect('bot_bazasi.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)', (user_id, username))
-    conn.commit()
+init_db()
+
+def get_user_lang(user_id):
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    c.execute("SELECT lang FROM users WHERE user_id=?", (user_id,))
+    res = c.fetchone()
     conn.close()
+    return res[0] if res else 'uz'
 
-def add_movie(code, message_id):
-    conn = sqlite3.connect('bot_bazasi.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO movies (code, message_id) VALUES (?, ?)', (code, message_id))
-    conn.commit()
-    conn.close()
-
-def get_movie(code):
-    conn = sqlite3.connect('bot_bazasi.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT message_id FROM movies WHERE code = ?', (code,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def get_users_count():
-    conn = sqlite3.connect('bot_bazasi.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users')
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-# --- FOYDALANUVCHI QISMI ---
-@dp.message(CommandStart())
-async def start_command(message: types.Message):
-    add_user(message.from_user.id, message.from_user.username)
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Kanalga obuna bo'lish", url="https://t.me/telegram")], 
-        [InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="check_sub")]
-    ])
-    
-    await message.answer(f"Assalomu alaykum, {message.from_user.first_name}!\n\n"
-                         f"Kino yoki faylni olish uchun maxsus kodni yuboring.", reply_markup=markup)
-
-@dp.callback_query(F.data == "check_sub")
-async def check_subscription(callback: types.CallbackQuery):
-    await callback.answer("Obuna tekshirildi! Endi fayl kodini yuborishingiz mumkin.", show_alert=True)
-
-# --- ADMIN PANEL QISMI ---
-@dp.message(Command("admin"))
-async def admin_panel(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        users_count = get_users_count()
-        admin_keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🎬 Yangi kino qo'shish")]],
-            resize_keyboard=True
-        )
-        await message.answer(f"📊 <b>Admin Panel</b>\n\n"
-                             f"👥 Botdagi jami foydalanuvchilar: {users_count} ta", 
-                             parse_mode="HTML", reply_markup=admin_keyboard)
-    else:
-        await message.answer("Siz admin emassiz!")
-
-# --- KINO QO'SHISH JARAYONI ---
-@dp.message(F.text == "🎬 Yangi kino qo'shish")
-async def ask_for_video(message: types.Message, state: FSMContext):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer("Iltimos, botga kino (video yoki fayl) yuboring:\n\n"
-                             "<i>Eslatma: Telegram botlar 2 GB gacha bo'lgan fayllarni qabul qila oladi!</i>", parse_mode="HTML")
-        await state.set_state(MovieState.waiting_for_video)
-
-@dp.message(MovieState.waiting_for_video)
-async def ask_for_code(message: types.Message, state: FSMContext):
-    if not (message.video or message.document or message.photo):
-        await message.answer("Iltimos, faqat video, rasm yoki fayl yuboring!")
-        return
-        
-    # Biz endi yuborilgan xabarning o'zining ID raqamini saqlab olamiz
-    await state.update_data(message_id=message.message_id)
-    
-    await message.answer("Ajoyib! Endi bu kino uchun qandaydir kod o'ylab toping (masalan: 125):")
-    await state.set_state(MovieState.waiting_for_code)
-
-@dp.message(MovieState.waiting_for_code)
-async def save_movie(message: types.Message, state: FSMContext):
-    movie_code = message.text
-    user_data = await state.get_data()
-    msg_id = user_data['message_id']
-    
-    # Bazaga kodni va xabar ID sini saqlaymiz
-    add_movie(movie_code, msg_id)
-    
-    await message.answer(f"✅ Kino muvaffaqiyatli saqlandi!\n\nKino kodi: <b>{movie_code}</b>", parse_mode="HTML")
-    await state.clear()
-
-# --- MIJOZLARGA KOD ORQALI KINO BERISH ---
-@dp.message(F.text.isdigit())
-async def send_file_by_code(message: types.Message):
-    file_code = message.text
-    movie_msg_id = get_movie(file_code) 
-    
-    if movie_msg_id:
+# --- MAJBURIY OBUNA TEKSHIRUVI ---
+def check_sub(user_id):
+    for ch in CHANNELS:
         try:
-            # Bot admin chatidagi o'sha xabarni topib, aynan nusxasini mijozga tashlab beradi
-            await bot.copy_message(chat_id=message.chat.id, from_chat_id=ADMIN_ID, message_id=movie_msg_id)
-        except Exception as e:
-            await message.answer("❌ Faylni yuborishda xatolik yuz berdi.")
-            logging.error(e)
+            status = bot.get_chat_member(ch, user_id).status
+            if status in ['left', 'kicked']:
+                return False
+        except Exception:
+            # Agar bot kanalga admin bo'lmasa xato beradi
+            pass
+    return True
+
+def sub_keyboard(lang_code):
+    markup = InlineKeyboardMarkup()
+    for idx, ch in enumerate(CHANNELS):
+        markup.add(InlineKeyboardButton(text=f"{LANG[lang_code]['sub_btn']} {idx+1}", url=f"https://t.me/{ch.replace('@', '')}"))
+    markup.add(InlineKeyboardButton(text=LANG[lang_code]['check_btn'], callback_data="check_sub"))
+    return markup
+
+# --- START VA TIL TANLASH ---
+@bot.message_handler(commands=['start'])
+def start_cmd(message):
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("🇺🇿 O'zbekcha", callback_data="lang_uz"),
+        InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru")
+    )
+    bot.send_message(message.chat.id, "Tilni tanlang / Выберите язык:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
+def set_lang(call):
+    lang = call.data.split('_')[1]
+    user_id = call.from_user.id
+
+    # Bazaga foydalanuvchini qo'shish yoki yangilash
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO users (user_id, lang) VALUES (?, ?)", (user_id, lang))
+    conn.commit()
+    conn.close()
+
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+
+    if check_sub(user_id):
+        bot.send_message(user_id, LANG[lang]['success'])
     else:
-        await message.answer("❌ Kechirasiz, bunday kodli kino topilmadi.")
+        bot.send_message(user_id, LANG[lang]['sub_text'], reply_markup=sub_keyboard(lang))
 
-async def main():
-    init_db()
-    print("Bot muvaffaqiyatli ishga tushdi!")
-    await dp.start_polling(bot, skip_updates=True)
+@bot.callback_query_handler(func=lambda call: call.data == "check_sub")
+def verify_sub(call):
+    user_id = call.from_user.id
+    lang = get_user_lang(user_id)
 
-if __name__ == '__main__':
-    asyncio.run(main())
+    if check_sub(user_id):
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(user_id, LANG[lang]['success'])
+    else:
+        bot.answer_callback_query(call.id, LANG[lang]['error'], show_alert=True)
+
+# --- ADMIN PANEL (Kino yuklash) ---
+@bot.message_handler(content_types=['video'])
+def handle_video(message):
+    if message.from_user.id == ADMIN_ID:
+        admin_data[ADMIN_ID] = {'file_id': message.video.file_id, 'step': 'name'}
+        bot.reply_to(message, "🎬 Video qabul qilindi. Iltimos, kino nomini yozing:")
+
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and admin_data.get(ADMIN_ID, {}).get('step') == 'name')
+def ask_for_code(message):
+    admin_data[ADMIN_ID]['name'] = message.text
+    admin_data[ADMIN_ID]['step'] = 'code'
+
+    # Bosh kodlarni va oxirgi kodlarni ko'rsatish
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    c.execute("SELECT code FROM movies ORDER BY code DESC LIMIT 5")
+    codes = c.fetchall()
+    conn.close()
+
+    last_codes = ", ".join([str(x[0]) for x in codes]) if codes else "Bazada hali kino yo'q"
+
+    bot.send_message(ADMIN_ID, f"Nomi saqlandi: *{message.text}*\n\n📈 Oxirgi ishlatilgan kodlar: {last_codes}\n\n🔢 Endi bu kino uchun bo'sh bo'lgan raqam (kod) yuboring:", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and admin_data.get(ADMIN_ID, {}).get('step') == 'code')
+def save_movie(message):
+    if not message.text.isdigit():
+        bot.send_message(ADMIN_ID, "⚠️ Iltimos, kod sifatida faqat raqam kiriting!")
+        return
+
+    code = int(message.text)
+    file_id = admin_data[ADMIN_ID]['file_id']
+    name = admin_data[ADMIN_ID]['name']
+
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO movies (code, file_id, name) VALUES (?, ?, ?)", (code, file_id, name))
+        conn.commit()
+        bot.send_message(ADMIN_ID, f"✅ Muvaffaqiyatli saqlandi!\n\n🎬 Kino: {name}\n🔢 Kodi: {code}")
+        admin_data.pop(ADMIN_ID) # Admin holatini tozalash
+    except sqlite3.IntegrityError:
+        bot.send_message(ADMIN_ID, "❌ Bu kod avvalroq band qilingan! Boshqa bo'sh kod kiriting:")
+    conn.close()
+
+# --- FOYDALANUVCHILAR UCHUN KINO QIDIRISH ---
+@bot.message_handler(func=lambda m: m.text.isdigit())
+def send_movie(message):
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
+
+    if not check_sub(user_id):
+        bot.send_message(user_id, LANG[lang]['sub_text'], reply_markup=sub_keyboard(lang))
+        return
+
+    code = int(message.text)
+    conn = sqlite3.connect('movies.db')
+    c = conn.cursor()
+    c.execute("SELECT file_id, name FROM movies WHERE code=?", (code,))
+    res = c.fetchone()
+    conn.close()
+
+    if res:
+        bot.send_video(chat_id=user_id, video=res[0], caption=f"🎬 {res[1]}")
+    else:
+        bot.send_message(user_id, LANG[lang]['not_found'])
+
+# Botni ishga tushirish
+if __name__ == "__main__":
+    print("Bot ishga tushdi...")
+    bot.infinity_polling()
