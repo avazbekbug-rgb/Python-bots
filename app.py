@@ -5,7 +5,7 @@ import sqlite3
 # --- SOZLAMALAR ---
 TOKEN = '8466034417:AAFYBovyZBTEk4OA5YUm86HMwhRe7xeJj_k'
 ADMIN_ID = 7653548625  # O'zingizning Telegram ID raqamingizni yozing
-CHANNELS = ['@as_ex'] # Kanallaringiz useri
+CHANNELS = ['@as_exe'] # Kanallaringiz useri
 
 bot = telebot.TeleBot(TOKEN)
 admin_data = {} # Admin qadamlarini saqlash uchun
