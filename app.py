@@ -32,21 +32,19 @@ LANG = {
 
 # --- MA'LUMOTLAR BAZASI ---
 def init_db():
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS movies (code INTEGER PRIMARY KEY, file_id TEXT, name TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, lang TEXT)''')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS movies (code INTEGER PRIMARY KEY, file_id TEXT, name TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, lang TEXT)''')
+        conn.commit()
 
 init_db()
 
 def get_user_lang(user_id):
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    c.execute("SELECT lang FROM users WHERE user_id=?", (user_id,))
-    res = c.fetchone()
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT lang FROM users WHERE user_id=?", (user_id,))
+        res = c.fetchone()
     return res[0] if res else 'uz'
 
 # --- MAJBURIY OBUNA TEKSHIRUVI ---
@@ -84,13 +82,15 @@ def set_lang(call):
     user_id = call.from_user.id
 
     # Bazaga foydalanuvchini qo'shish yoki yangilash
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO users (user_id, lang) VALUES (?, ?)", (user_id, lang))
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO users (user_id, lang) VALUES (?, ?)", (user_id, lang))
+        conn.commit()
 
-    bot.delete_message(call.message.chat.id, call.message.message_id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 
     if check_sub(user_id):
         bot.send_message(user_id, LANG[lang]['success'])
@@ -103,7 +103,10 @@ def verify_sub(call):
     lang = get_user_lang(user_id)
 
     if check_sub(user_id):
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
         bot.send_message(user_id, LANG[lang]['success'])
     else:
         bot.answer_callback_query(call.id, LANG[lang]['error'], show_alert=True)
@@ -121,11 +124,10 @@ def ask_for_code(message):
     admin_data[ADMIN_ID]['step'] = 'code'
 
     # Bosh kodlarni va oxirgi kodlarni ko'rsatish
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    c.execute("SELECT code FROM movies ORDER BY code DESC LIMIT 5")
-    codes = c.fetchall()
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT code FROM movies ORDER BY code DESC LIMIT 5")
+        codes = c.fetchall()
 
     last_codes = ", ".join([str(x[0]) for x in codes]) if codes else "Bazada hali kino yo'q"
 
@@ -141,16 +143,15 @@ def save_movie(message):
     file_id = admin_data[ADMIN_ID]['file_id']
     name = admin_data[ADMIN_ID]['name']
 
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO movies (code, file_id, name) VALUES (?, ?, ?)", (code, file_id, name))
-        conn.commit()
-        bot.send_message(ADMIN_ID, f"✅ Muvaffaqiyatli saqlandi!\n\n🎬 Kino: {name}\n🔢 Kodi: {code}")
-        admin_data.pop(ADMIN_ID) # Admin holatini tozalash
-    except sqlite3.IntegrityError:
-        bot.send_message(ADMIN_ID, "❌ Bu kod avvalroq band qilingan! Boshqa bo'sh kod kiriting:")
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO movies (code, file_id, name) VALUES (?, ?, ?)", (code, file_id, name))
+            conn.commit()
+            bot.send_message(ADMIN_ID, f"✅ Muvaffaqiyatli saqlandi!\n\n🎬 Kino: {name}\n🔢 Kodi: {code}")
+            admin_data.pop(ADMIN_ID) # Admin holatini tozalash
+        except sqlite3.IntegrityError:
+            bot.send_message(ADMIN_ID, "❌ Bu kod avvalroq band qilingan! Boshqa bo'sh kod kiriting:")
 
 # --- FOYDALANUVCHILAR UCHUN KINO QIDIRISH ---
 @bot.message_handler(func=lambda m: m.text.isdigit())
@@ -163,14 +164,16 @@ def send_movie(message):
         return
 
     code = int(message.text)
-    conn = sqlite3.connect('movies.db')
-    c = conn.cursor()
-    c.execute("SELECT file_id, name FROM movies WHERE code=?", (code,))
-    res = c.fetchone()
-    conn.close()
+    with sqlite3.connect('movies.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT file_id, name FROM movies WHERE code=?", (code,))
+        res = c.fetchone()
 
     if res:
-        bot.send_video(chat_id=user_id, video=res[0], caption=f"🎬 {res[1]}")
+        try:
+            bot.send_video(chat_id=user_id, video=res[0], caption=f"🎬 {res[1]}")
+        except Exception as e:
+            print(f"Failed to send video to {user_id}: {e}")
     else:
         bot.send_message(user_id, LANG[lang]['not_found'])
 
